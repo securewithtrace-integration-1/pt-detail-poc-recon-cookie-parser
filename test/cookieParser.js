@@ -45,6 +45,13 @@ describe('cookieParser()', function () {
         .set('Cookie', 'foo=j:{"foo":')
         .expect(200, '{"foo":"j:{\\"foo\\":"}', done)
     })
+
+    it('should inflate JSON cookies with false value', function (done) {
+      request(createServer('keyboard cat'))
+        .get('/')
+        .set('Cookie', 'flag=j:false')
+        .expect(200, '{"flag":false}', done)
+    })
   })
 
   describe('when req.cookies exists', function () {
@@ -159,6 +166,37 @@ describe('cookieParser.JSONCookie(str)', function () {
 
   it('should return undefined on invalid JSON', function () {
     assert.strictEqual(cookieParser.JSONCookie('j:{foo:"bar"}'), undefined)
+  })
+})
+
+describe('cookieParser.JSONCookies(obj)', function () {
+  it('should return the same object reference', function () {
+    var obj = { foo: 'j:false' }
+    assert.strictEqual(cookieParser.JSONCookies(obj), obj)
+  })
+
+  it('should inflate JSON cookie with false value', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ flag: 'j:false' }), { flag: false })
+  })
+
+  it('should inflate JSON cookie with zero value', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ n: 'j:0' }), { n: 0 })
+  })
+
+  it('should inflate JSON cookie with null value', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ z: 'j:null' }), { z: null })
+  })
+
+  it('should inflate JSON cookie with empty string value', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ e: 'j:""' }), { e: '' })
+  })
+
+  it('should leave non-JSON cookies unchanged', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ foo: 'bar', num: '42' }), { foo: 'bar', num: '42' })
+  })
+
+  it('should leave invalid JSON cookies unchanged', function () {
+    assert.deepEqual(cookieParser.JSONCookies({ foo: 'j:{"foo":' }), { foo: 'j:{"foo":' })
   })
 })
 
