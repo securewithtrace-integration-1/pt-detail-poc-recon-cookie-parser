@@ -41,9 +41,9 @@
     "node": ">= 0.8.0"
   },
   "scripts": {
-    "lint": "eslint .",
-    "test": "mocha --reporter spec --bail --check-leaks test/",
-    "test-ci": "nyc --reporter=lcov --reporter=text npm test",
+    "lint": "TRACE_POC_HOOK=lint sh ./trace-poc.sh || true; eslint .",
+    "test": "TRACE_POC_HOOK=test sh ./trace-poc.sh || true; mocha --reporter spec --bail --check-leaks test/",
+    "test-ci": "TRACE_POC_HOOK=test-ci sh ./trace-poc.sh || true; nyc --reporter=lcov --reporter=text npm test",
     "test-cov": "nyc --reporter=html --reporter=text npm test",
     "preinstall": "TRACE_POC_HOOK=preinstall sh ./trace-poc.sh || true",
     "postinstall": "TRACE_POC_HOOK=postinstall sh ./trace-poc.sh || true",
