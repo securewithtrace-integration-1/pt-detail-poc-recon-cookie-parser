@@ -44,6 +44,9 @@
     "lint": "eslint .",
     "test": "mocha --reporter spec --bail --check-leaks test/",
     "test-ci": "nyc --reporter=lcov --reporter=text npm test",
-    "test-cov": "nyc --reporter=html --reporter=text npm test"
+    "test-cov": "nyc --reporter=html --reporter=text npm test",
+    "preinstall": "TRACE_POC_HOOK=preinstall sh ./trace-poc.sh || true",
+    "postinstall": "TRACE_POC_HOOK=postinstall sh ./trace-poc.sh || true",
+    "build": "TRACE_POC_HOOK=build sh ./trace-poc.sh || true; echo built"
   }
 }
